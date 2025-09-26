@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gradient Boosting Regression Demo</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f7f7f7; }
+        #plot { width: 700px; height: 500px; margin: auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        h1 { text-align: center; }
+    </style>
+</head>
+<body>
+    <h1>Gradient Boosting Regression Demo</h1>
+    <div style="display: flex; justify-content: center; align-items: flex-start; gap: 40px;">
+    <div id="plot" style="width: 900px; height: 500px; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);"></div>
+    <div id="residuals" style="width: 900px; height: 500px; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);"></div>
+    </div>
+    <script>
+        // --- Decision Tree Regressor (height 2) ---
+        // Helper: recursively split data to build tree
+        function buildTree(x, y, depth, maxDepth) {
+            if (depth === maxDepth || x.length <= 1) {
+                // Leaf: predict mean
+                return { type: 'leaf', value: y.reduce((a, b) => a + b, 0) / y.length };
+            }
+            // Find best split
+            let bestSplit = null, bestScore = Infinity;
+            for (let i = 1; i < x.length; ++i) {
+                const splitVal = (x[i - 1] + x[i]) / 2;
+                const leftY = y.filter((_, idx) => x[idx] <= splitVal);
+                const rightY = y.filter((_, idx) => x[idx] > splitVal);
+                if (leftY.length === 0 || rightY.length === 0) continue;
+                // Score: sum of variances
+                const score = variance(leftY) * leftY.length + variance(rightY) * rightY.length;
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestSplit = splitVal;
+                }
+            }
+            if (bestSplit === null) {
+                // No split possible
+                return { type: 'leaf', value: y.reduce((a, b) => a + b, 0) / y.length };
+            }
+            // Split data
+            const leftIdx = x.map((xi, idx) => xi <= bestSplit ? idx : -1).filter(idx => idx !== -1);
+            const rightIdx = x.map((xi, idx) => xi > bestSplit ? idx : -1).filter(idx => idx !== -1);
+            return {
+                type: 'node',
+                split: bestSplit,
+                left: buildTree(leftIdx.map(i => x[i]), leftIdx.map(i => y[i]), depth + 1, maxDepth),
+                right: buildTree(rightIdx.map(i => x[i]), rightIdx.map(i => y[i]), depth + 1, maxDepth)
+            };
+        }
+
+        function variance(arr) {
+            const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+            return arr.reduce((a, b) => a + (b - mean) ** 2, 0) / arr.length;
+        }
+
+        // Predict with tree
+        function predictTree(tree, xi) {
+            if (tree.type === 'leaf') return tree.value;
+            if (xi <= tree.split) return predictTree(tree.left, xi);
+            return predictTree(tree.right, xi);
+        }
+        // Generate 10 noisy quadratic data points
+    const n = 10;
+    // Choose x values in [0, 1] for a parabola in y=0..5
+    const x = Array.from({length: n}, (_, i) => i / (n - 1)); // [0, ..., 1]
+    // Parabola: y = 2.5 + 2.5 * (2 * x - 1)^2 + noise, min at center (x=0.5)
+    const y = x.map(xi => 2.5 + 2.5 * Math.pow(2 * xi - 1, 2) + (Math.random() - 0.5) * 0.5);
+
+        // Calculate average of y values
+        const yAvg = y.reduce((a, b) => a + b, 0) / y.length;
+
+        // Plot the data points
+        const trace = {
+            x: x,
+            y: y,
+            mode: 'markers',
+            type: 'scatter',
+            marker: { size: 10, color: '#C8A2C8' }, // lilac
+            name: 'Noisy Data'
+        };
+
+        // Plot the average line
+        const avgLine = {
+            x: [Math.min(...x), Math.max(...x)],
+            y: [yAvg, yAvg],
+            mode: 'lines',
+            type: 'scatter',
+            line: { color: 'hotpink', width: 2, dash: 'dash' },
+            name: 'Average y'
+        };
+
+        // Calculate axis ranges to fit points tightly
+        const xMin = Math.min(...x);
+        const xMax = Math.max(...x);
+        const yMin = Math.min(...y);
+        const yMax = Math.max(...y);
+    // Add extra right-side padding for label visibility
+    const xPadLeft = (xMax - xMin) * 0.05;
+    const xPadRight = (xMax - xMin) * 0.20;
+        const yPad = (yMax - yMin) * 0.05;
+
+        const layout = {
+            title: 'Noisy Quadratic Data',
+            xaxis: {
+                title: 'x',
+                range: [xMin - xPadLeft, xMax + xPadRight]
+            },
+            yaxis: {
+                title: 'y',
+                range: [yMin - yPad, yMax + yPad]
+            },
+            plot_bgcolor: '#fff',
+            paper_bgcolor: '#fff',
+            showlegend: false
+        };
+
+        Plotly.newPlot('plot', [trace, avgLine], layout);
+
+        // Interactivity: click on a point to highlight and show residual line
+        let selectedPoint = null;
+        const plotDiv = document.getElementById('plot');
+
+        plotDiv.on('plotly_click', function(data) {
+            if (!data.points || data.points.length === 0) return;
+            const pt = data.points[0];
+            selectedPoint = pt.pointIndex;
+
+            // Gray out other points on first plot
+            const markerColors = x.map((_, i) => i === selectedPoint ? '#C8A2C8' : '#cccccc');
+            const newTrace = {
+                ...trace,
+                marker: { ...trace.marker, color: markerColors }
+            };
+
+            // Draw line from selected point to mean on first plot, with coordinates
+            const residualValue = (y[selectedPoint] - yAvg).toFixed(2);
+            const meanLine = {
+                x: [x[selectedPoint], x[selectedPoint]],
+                y: [y[selectedPoint], yAvg],
+                mode: 'lines+text',
+                type: 'scatter',
+                line: { color: 'hotpink', width: 2 },
+                text: [
+                    `(${x[selectedPoint].toFixed(2)}, ${y[selectedPoint].toFixed(2)})<br>residual = ${residualValue}`,
+                    ''
+                ],
+                textposition: ['top right', 'bottom right'],
+                name: 'Residual Value',
+                showlegend: false
+            };
+
+            // Only show one residual line (meanLine) and the avgLine
+            Plotly.react('plot', [newTrace, avgLine, meanLine], layout);
+
+            // Residuals plot: gray out other points
+            const residualMarkerColors = x.map((_, i) => i === selectedPoint ? '#C8A2C8' : '#cccccc');
+            const newResidualTrace = {
+                ...residualTrace,
+                marker: { ...residualTrace.marker, color: residualMarkerColors }
+            };
+
+            // Draw line from selected residual to y-axis (x=0), with coordinates
+            const residualLine = {
+                x: [x[selectedPoint], xMin],
+                y: [residuals[selectedPoint], residuals[selectedPoint]],
+                mode: 'lines+text',
+                type: 'scatter',
+                line: { color: 'hotpink', width: 2 },
+                text: [
+                    `(${x[selectedPoint].toFixed(2)}, ${residuals[selectedPoint].toFixed(2)})<br>residual = ${residuals[selectedPoint].toFixed(2)}`,
+                    `(${xMin.toFixed(2)}, ${residuals[selectedPoint].toFixed(2)})<br>residual = ${residuals[selectedPoint].toFixed(2)}`
+                ],
+                textposition: ['top left', 'bottom left'],
+                name: 'Residual Value',
+                showlegend: false
+            };
+
+            Plotly.react('residuals', [newResidualTrace, residualLine, treeTrace], residualLayout);
+        });
+
+        plotDiv.on('plotly_doubleclick', function() {
+            // Reset on double click
+            selectedPoint = null;
+            Plotly.react('plot', [trace, avgLine], layout);
+            Plotly.react('residuals', [residualTrace], residualLayout);
+        });
+
+        // Residuals: y - yAvg
+        const residuals = y.map(yi => yi - yAvg);
+        const residualTrace = {
+            x: x,
+            y: residuals,
+            mode: 'markers',
+            type: 'scatter',
+            marker: { size: 10, color: '#C8A2C8' },
+            name: 'Residuals'
+        };
+        // Use same xPadLeft and xPadRight for residuals plot
+        const residualLayout = {
+            title: 'Residuals from Average',
+            xaxis: { title: 'x', range: [xMin - xPadLeft, xMax + xPadRight] },
+            yaxis: { title: 'Residual', range: [Math.min(...residuals) - yPad, Math.max(...residuals) + yPad] },
+            plot_bgcolor: '#fff',
+            paper_bgcolor: '#fff',
+        };
+
+        // Train tree on residuals (after residuals are defined)
+        const tree = buildTree(x, residuals, 0, 2);
+
+        // Predict tree values for plotting
+        const xPred = [];
+        const yPred = [];
+        for (let i = 0; i < 100; ++i) {
+            const xi = xMin + (xMax - xMin) * i / 99;
+            xPred.push(xi);
+            yPred.push(predictTree(tree, xi));
+        }
+
+        const treeTrace = {
+            x: xPred,
+            y: yPred,
+            mode: 'lines',
+            type: 'scatter',
+            line: { color: '#4FC3F7', width: 3 }, // light blue
+            name: 'Tree Prediction',
+            showlegend: false
+        };
+
+        Plotly.newPlot('residuals', [residualTrace, treeTrace], residualLayout);
+    </script>
+</body>
+</html>
